@@ -1,0 +1,47 @@
+# ── 个人运行产生的文件（不要提交）──
+# 注意：gitignore 不支持行尾注释，注释必须单独占一行，否则整行会变成一条无效规则。
+
+# 游戏专用 Chrome 配置（含你的 localStorage 存档）
+browser/
+# 你的存档：账号、进度、星尘
+data/
+# state/ 下除 asset-list.txt 外全部排除。
+# 注意：不要写成 state/*.png —— 通配符 * 不跨越目录分隔符，管不到 state/android-probe/
+# 这类子目录，设备截图会漏出去。用 state/* 排除整棵目录树，再单独放行同步所需清单。
+state/*
+!state/asset-list.txt
+# APK 构建中间产物
+android/build/
+# 打包输出
+dist/
+*.zip
+*.apk
+
+# ── 签名密钥库：绝对不能公开 ──
+# keystore 里是 APK 的签名私钥。一旦公开，任何人都能签出「包名与签名都相同」的
+# APK，而已安装的用户会被系统当成合法更新接受 —— 等于可以冒充你发新版。
+*.keystore
+*.jks
+*.p12
+*.pfx
+*.pem
+*.key
+
+# ── 关于 web/（游戏素材，约 127 MB）──
+# 默认打包时会包含它，这样别人下载仓库即可直接玩。
+# 但请注意：这些素材的版权属于原作者与相应权利人（见 LICENSE / NOTICE.md），
+# 把它们推进公开仓库属于"再分发"，有被投诉下架的风险。
+#
+# 如果你希望仓库只放"工具与代码"、由使用者自己从官网同步素材，
+# 取消下面这行的注释即可（使用者双击“检查更新.cmd”就会自己下载）：
+# web/
+
+# 同理，APK 里也打包了全套素材，单文件 106.7 MB 超过 GitHub 的 100 MB 限制，
+# 只能作为 Release 附件上传，不要提交进仓库：
+Pokebonk-Offline-*.apk
+
+# ── 其它 ──
+*.tmp
+*.log
+Thumbs.db
+desktop.ini

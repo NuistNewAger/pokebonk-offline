@@ -1,0 +1,16 @@
+/* Chromium 兼容修正（旧内核 UA 样式差异）
+ *
+ * 旧版 Chromium（例如华为 WebView 114）的用户代理样式表里写着：
+ *     button { align-items: flex-start }
+ * 而新版 Chromium（Chrome 128 起）把它改成了 normal（对 flex 容器等价于 stretch）。
+ *
+ * 游戏里像 .sp-card（选御三家的卡片）这类「<button> + display:flex +
+ * flex-direction:column」的容器没有自己声明 align-items，于是在旧内核上子元素
+ * 不再撑满宽度：.ls-show 宽度塌成 0，精灵画布和名字、属性徽章全都看不见，
+ * 卡片变成一片空白。
+ *
+ * 这里统一按新版行为修正。新版 Chromium 上这条规则本来就等于默认值，无副作用。
+ */
+button {
+  align-items: normal;
+}
