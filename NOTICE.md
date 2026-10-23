@@ -58,7 +58,11 @@
 * `lib/pb-compat.css` —— 旧内核 Chromium 的样式兼容修正
 * 启动器、更新脚本、定时任务脚本
 
-## 五、移除承诺
+## 五、本工程的开发方式与用途
+
+本工程**全程由 DSH（DeepSeek Harness）开发**，发布到 GitHub 上**仅用作个人纪录**。
+
+## 六、移除承诺
 
 若 PokéBonk 作者、任天堂 / Creatures Inc. / GAME FREAK inc.、PMD SpriteCollab
 或任何权利人认为本仓库或其发布包侵犯权益，请通过仓库 Issue 告知，

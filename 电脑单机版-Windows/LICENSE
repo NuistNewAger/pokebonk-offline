@@ -1,0 +1,90 @@
+PokéBonk 离线版 · 许可与使用条款
+=====================================
+
+一句话总结
+----------
+自写代码随便用（署名即可）；**游戏素材不是我的，不授权任何商业使用，
+仅供个人离线游玩**；原作者或权利人要求删除，立刻删除。
+
+
+一、适用范围
+------------
+
+本仓库包含两类内容，授权完全不同，请分开看：
+
+A. 本项目自写的代码
+   `sync.mjs`、`server.mjs`、`lib/`、`android/`、各启动脚本与构建脚本。
+
+B. 游戏本体与素材（**不属于本项目**）
+   `web/` 目录下的全部内容、APK 内的 `assets/web/`、以及 `预览*.png` 里出现的
+   游戏画面 —— 包括但不限于：代码包（bundle）、精灵图、头像、模型、音效、
+   音乐、字体、界面素材、多语言文本、活动图片。
+
+
+二、A 类（自写代码）的授权
+--------------------------
+
+允许任何人：
+  * 免费使用、复制、修改、合并、发布、分发本项目的自写代码；
+  * 用于学习、研究、个人游玩。
+
+条件是：
+  * 保留本文件与 `NOTICE.md` 中的署名与出处说明；
+  * **不得用于商业用途**（包括但不限于售卖、付费下载、内置广告、
+    捆绑销售、以本项目的下载量/流量直接获利）；
+  * 不得声称这些代码是你原创。
+
+
+三、B 类（游戏素材）的授权 —— 没有授权
+--------------------------------------
+
+  * 游戏本体、美术、音频、文本等素材的著作权属于 PokéBonk 作者 Charcher
+    及相应权利人（Nintendo / Creatures Inc. / GAME FREAK inc. 等）；
+    精灵素材来自 PMD SpriteCollab（CC BY-NC 4.0，禁止商用）。
+  * 本项目**不附带、也不授予**任何素材相关的权利。仓库里出现这些文件，
+    只是为了让你能在自己电脑/手机上离线游玩同一个游戏。
+  * **严禁**任何形式的商业使用：售卖、付费墙、广告变现、二次分发收费、
+    预装在商业设备中等等。
+  * **严禁**再打包成"自己的作品"发布，或抹掉原作者署名。
+  * 请把它当成"我个人从官网同步下来的一份离线副本"，仅供自己游玩。
+
+
+四、与原作者的声明
+------------------
+
+  * 本项目是**非官方**的第三方工具，与 PokéBonk 作者 Charcher 无任何隶属
+    或授权关系，也未获得其赞助或认可。
+  * 本项目不提供任何形式的游戏内购、账号交易或代练服务。
+  * 如果你喜欢这个游戏，请去官网 <https://pokebonk.com/> 支持原作者。
+
+
+五、立即下架承诺
+----------------
+
+  如果 PokéBonk 作者、Nintendo / Creatures Inc. / GAME FREAK inc.、
+  或任何权利人认为本仓库或其发布包侵犯了权益，请通过 Issue 或邮件告知，
+  **我们会在收到通知后第一时间删除相关文件与发布包**，不做任何辩解与拖延。
+
+  同理，如果本仓库引用的任何开源项目作者不希望被署名引用，告知后我们
+  会立刻移除相关说明。
+
+
+六、免责
+--------
+
+  本项目按"现状"提供，不提供任何担保。使用本工具同步、保存、运行游戏
+  所产生的任何后果（包括账号、设备、数据损失）由使用者自行承担。
+
+
+------------------------------------------------------------------
+English summary (non-normative)
+------------------------------------------------------------------
+The scripts in this repository are free to use, modify and share for
+non-commercial purposes, provided attribution is kept. The game itself
+and all of its assets belong to their respective owners (PokéBonk by
+Charcher; Pokémon assets by Nintendo / Creatures Inc. / GAME FREAK inc.;
+sprites from PMD SpriteCollab, CC BY-NC 4.0). No rights to those assets
+are granted here: they are included only so that you can play the same
+game offline, for personal use. Commercial use of any kind is forbidden.
+This project is unofficial and not affiliated with the game's author.
+Rights holders may request removal and it will be honoured immediately.
