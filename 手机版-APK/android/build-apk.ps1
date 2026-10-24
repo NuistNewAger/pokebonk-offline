@@ -59,6 +59,20 @@ $bt = Get-ChildItem (Join-Path $Sdk 'build-tools') -Directory |
 $androidJar = Join-Path $Sdk 'platforms\android-34\android.jar'
 $adb = Join-Path $Sdk 'platform-tools\adb.exe'
 $keystore = Join-Path $android 'pokebonk.keystore'
+$ksProps = Join-Path $android 'keystore.properties'
+
+# ⚠️ 签名口令不写在本脚本里 —— 本脚本会进公开仓库。
+#    2026-10-24 发现旧版把口令（pokebonk）明文硬编码在此，而密钥库本身曾随 Release
+#    附件公开约 17.5 小时；文件 + 口令两样都齐，等于签名能力完全外泄，故已整体轮换密钥。
+#    口令一律从 keystore.properties 读取，该文件在 .gitignore 中，绝不提交。
+$ksAlias = 'pokebonk'
+$ksPass = $null
+if (Test-Path $ksProps) {
+  foreach ($line in Get-Content $ksProps -Encoding UTF8) {
+    if ($line -match '^\s*storePassword\s*=\s*(\S+)\s*$') { $ksPass = $Matches[1] }
+    elseif ($line -match '^\s*keyAlias\s*=\s*(\S+)\s*$') { $ksAlias = $Matches[1] }
+  }
+}
 
 foreach ($p in @($bt, $androidJar)) {
   if (-not (Test-Path $p)) { throw "缺少 $p，请先安装 Android SDK（platforms;android-34 / build-tools）" }
@@ -157,12 +171,24 @@ try {
   Write-Host '== 7/7 对齐与签名 ==' -ForegroundColor Cyan
   & "$bt\zipalign.exe" -f -p 4 "$work\base.apk" "$work\aligned.apk"
   if ($LASTEXITCODE -ne 0) { throw 'zipalign 失败' }
-  if (-not (Test-Path $keystore)) {
-    & "$Jdk\bin\keytool.exe" -genkeypair -keystore $keystore -alias pokebonk -keyalg RSA -keysize 2048 `
-      -validity 10000 -storepass pokebonk -keypass pokebonk `
-      -dname "CN=Pokebonk Offline, O=Local Build, C=CN" | Out-Null
+  if (-not (Test-Path $keystore) -or -not $ksPass) {
+    if (-not $ksPass) {
+      # 首次构建：自动生成 24 位随机口令并落到本地文件，脚本里不留任何口令
+      $rb = New-Object byte[] 24
+      [System.Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($rb)
+      $ksPass = ([Convert]::ToBase64String($rb) -replace '[+/=]', '').Substring(0, 24)
+      [System.IO.File]::WriteAllText($ksProps,
+        "# APK 签名口令 —— 本文件不得提交到仓库`nstoreFile=pokebonk.keystore`nstorePassword=$ksPass`nkeyPassword=$ksPass`nkeyAlias=$ksAlias`n",
+        (New-Object System.Text.UTF8Encoding($false)))
+      Write-Host '   已生成新签名口令 → keystore.properties（请自行备份）' -ForegroundColor Yellow
+    }
+    if (-not (Test-Path $keystore)) {
+      & "$Jdk\bin\keytool.exe" -genkeypair -keystore $keystore -alias $ksAlias -keyalg RSA -keysize 2048 `
+        -validity 10000 -storepass $ksPass -keypass $ksPass `
+        -dname "CN=Pokebonk Offline, O=Local Build, C=CN" | Out-Null
+    }
   }
-  & "$bt\apksigner.bat" sign --ks $keystore --ks-pass pass:pokebonk --key-pass pass:pokebonk `
+  & "$bt\apksigner.bat" sign --ks $keystore --ks-pass "pass:$ksPass" --key-pass "pass:$ksPass" `
     --v1-signing-enabled true --v2-signing-enabled true --out "$work\signed.apk" "$work\aligned.apk"
   if ($LASTEXITCODE -ne 0) { throw 'apksigner 失败' }
 

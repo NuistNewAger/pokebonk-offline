@@ -50,6 +50,10 @@ dist/
 *.pfx
 *.pem
 *.key
+# 签名口令文件（build-apk.ps1 从这里读口令，脚本本身不留口令）
+keystore.properties
+# 已泄露的旧密钥备份：*.keystore 匹配不到这个带后缀的名字，必须单独写
+*.keystore.compromised-*
 
 # ── 关于游戏素材（电脑单机版-Windows/web/，约 127 MB）──
 # 默认包含它，这样别人 clone 下来即可直接玩。
