@@ -12,7 +12,7 @@
  */
 import http from 'node:http';
 import { createReadStream, existsSync } from 'node:fs';
-import { mkdir, readFile, writeFile, stat, readdir } from 'node:fs/promises';
+import { mkdir, readFile, writeFile, stat, readdir, rm } from 'node:fs/promises';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import {
@@ -22,6 +22,9 @@ import {
 import { socialRoutes, edgeKey } from './lib/api-social.mjs';
 import * as official from './lib/official.mjs';
 import { LAB_ITEMS, ITEM_PRICES } from './lib/prices.mjs';
+import {
+  TASK_DUST, MAX_METRICS, periodIndex, drawTask, taskById, metricDelta, prizeReward,
+} from './lib/tasks.mjs';
 
 const PORT = Number(process.env.PORT || 8787);
 const UPSTREAM = 'https://pokebonk.com';
@@ -95,6 +98,44 @@ store.pres ||= {};
 store.rooms ||= {};
 store.invites ||= {};
 store.nextRun ||= 1;
+
+// ---- 启动快照 + 空档告警 ----
+// 每次启动都把当前存档复制一份到 data/backups/（保留最近 20 份）：
+// 万一下次又出现「存档被外部覆盖」这种事，至少能退回上一个版本。
+const BACKUP_DIR = path.join(DATA, 'backups');
+async function snapshotStore() {
+  try {
+    const raw = await readFile(STORE_FILE, 'utf8');
+    await mkdir(BACKUP_DIR, { recursive: true });
+    const stamp = new Date().toISOString().replace(/[-:T]/g, '').slice(0, 14);
+    await writeFile(path.join(BACKUP_DIR, `store-${stamp}.json`), raw);
+    const olds = (await readdir(BACKUP_DIR)).filter((f) => f.startsWith('store-')).sort();
+    for (const f of olds.slice(0, Math.max(0, olds.length - 20))) {
+      await rm(path.join(BACKUP_DIR, f), { force: true });
+    }
+  } catch { /* 还没有存档文件 */ }
+}
+await snapshotStore();
+
+const accountCount = Object.keys(store.accounts).length;
+if (!accountCount) {
+  // 存档里一个账号都没有：如果备份里有账号，说明很可能是被外部覆盖了
+  try {
+    const olds = (await readdir(BACKUP_DIR)).filter((f) => f.startsWith('store-')).sort();
+    for (const f of olds.reverse()) {
+      const old = JSON.parse(await readFile(path.join(BACKUP_DIR, f), 'utf8'));
+      const n = Object.keys(old.accounts || {}).length;
+      if (n > 0) {
+        console.warn(`\n⚠️  存档是空的，但 ${f} 里有 ${n} 个账号。`);
+        console.warn(`⚠️  如果这不是你要的，先停服，再执行：`);
+        console.warn(`    copy "${path.join(BACKUP_DIR, f)}" "${STORE_FILE}"\n`);
+        break;
+      }
+    }
+  } catch { /* 没有可用备份 */ }
+} else {
+  console.log(`[存档] 已载入 ${accountCount} 个账号（快照目录 data/backups/）`);
+}
 
 let saveTimer = 0;
 function persist() {
@@ -203,6 +244,7 @@ const requireAccount = (req, res) => {
 route('GET', '/profile', (req, res) => {
   const acc = requireAccount(req, res);
   if (!acc) return;
+  syncTasks(acc.profile);      // 保证委托抽签与当前周期一致（客户端就不会再自行重抽）
   json(res, 200, { profile: acc.profile, now: now() });
 });
 route('PUT', '/profile/prefs', async (req, res) => {
@@ -231,6 +273,117 @@ route('POST', '/profile/starter', async (req, res) => {
   persist();
   json(res, 200, { profile: p });
 });
+// --------------------------------------------------------------- 委托 ----
+//
+// 客户端的设计：profile.daily/weekly = { idx, ids[3], prog[3], claimed[4], rerolls }
+//   · ids 由客户端抽签（确定性算法，服务端已复刻，见 lib/tasks.mjs）
+//   · prog 是「进度」，客户端只负责显示，累加必须由服务端做
+//   · claimed 记录领奖，rerolls 记录本周期的重随次数（每周期 1 次）
+// 之前本地后端完全没实现，所以进度永远是 0 —— 这里按官方规则补齐。
+
+const TASK_PERIODS = ['daily', 'weekly'];
+
+function newPeriodState(period, idx) {
+  return {
+    idx,
+    ids: [0, 1, 2].map((slot) => drawTask(period, idx, slot).id),
+    prog: [0, 0, 0],
+    claimed: [0, 0, 0, 0],
+    rerolls: 0,
+  };
+}
+
+// 让档案里的抽签结果与当前周期一致（等价于客户端的 BO()，但由服务端说了算）
+function syncTasks(p) {
+  const now = Date.now();
+  for (const period of TASK_PERIODS) {
+    const idx = periodIndex(period, now);
+    const cur = p[period];
+    if (!cur || typeof cur !== 'object' || cur.idx !== idx || !Array.isArray(cur.ids) || cur.ids.length !== 3) {
+      p[period] = newPeriodState(period, idx);
+      continue;
+    }
+    // 形状补全（老存档可能缺字段）
+    if (!Array.isArray(cur.prog)) cur.prog = [0, 0, 0];
+    if (!Array.isArray(cur.claimed) || cur.claimed.length !== 4) cur.claimed = [0, 0, 0, 0];
+    if (typeof cur.rerolls !== 'number') cur.rerolls = 0;
+  }
+  p.dailyStreak ||= { last: 0, n: 0 };
+  p.bag ||= {};
+}
+
+// 结算时把本局增量累加到当前三个委托上
+function addTaskProgress(p, result) {
+  syncTasks(p);
+  const counters = result?.progress?.counters || {};
+  const touched = [];
+  for (const period of TASK_PERIODS) {
+    const cur = p[period];
+    for (let slot = 0; slot < 3; slot++) {
+      const def = taskById(cur.ids[slot]);
+      if (!def) continue;
+      const delta = metricDelta(def.metric, result, counters);
+      if (!delta) continue;
+      const before = cur.prog[slot] || 0;
+      const next = MAX_METRICS.has(def.metric)
+        ? Math.max(before, delta)
+        : before + delta;
+      cur.prog[slot] = Math.min(def.goal, next);
+      if (cur.prog[slot] !== before) touched.push(`${period}#${slot} ${def.id} ${before}→${cur.prog[slot]}/${def.goal}`);
+    }
+  }
+  return touched;
+}
+
+function taskClaimable(p, period, slot) {
+  const cur = p[period];
+  if (!cur || !Number.isInteger(slot) || slot < 0 || slot > 3 || cur.claimed[slot]) return false;
+  if (slot === 3) return cur.claimed[0] === 1 && cur.claimed[1] === 1 && cur.claimed[2] === 1;
+  const def = taskById(cur.ids[slot]);
+  return !!def && (cur.prog[slot] || 0) >= def.goal;
+}
+
+// 领奖：与客户端 WO() 完全一致（服务端必须真的发奖，否则 adopt() 会把本地加的钱覆盖掉）
+function claimTaskReward(p, period, slot) {
+  syncTasks(p);
+  if (!taskClaimable(p, period, slot)) return null;
+  const cur = p[period];
+  let dust = 0;
+  let items = [];
+  if (slot < 3) {
+    dust = TASK_DUST[period][slot] || 0;
+  } else {
+    const prize = prizeReward(period, cur, p.dailyStreak);
+    dust = prize.dust;
+    items = prize.items || [];
+    if (prize.streak) p.dailyStreak = prize.streak;
+  }
+  cur.claimed[slot] = 1;
+  for (const item of items) p.bag[item] = Math.min(9, (p.bag[item] || 0) + 1);
+  p.stardust = (Number(p.stardust) || 0) + dust;
+  p.totalStardust = (Number(p.totalStardust) || 0) + dust;
+  return { dust, items };
+}
+
+// 重随：与客户端 GO() 一致（每周期 1 次，已完成/已领取的不能换）
+function rerollTask(p, period, slot) {
+  syncTasks(p);
+  const cur = p[period];
+  if (!cur || !Number.isInteger(slot) || slot < 0 || slot > 2) return null;
+  const def = taskById(cur.ids[slot]);
+  if (cur.rerolls >= 1 || cur.claimed[slot]) return null;
+  if (def && (cur.prog[slot] || 0) >= def.goal) return null;
+  let id = cur.ids[slot];
+  for (let r = cur.rerolls + 1; r < cur.rerolls + 8 && cur.ids.includes(id); r++) {
+    id = drawTask(period, cur.idx, slot, r).id;
+  }
+  if (cur.ids.includes(id)) return null;
+  cur.ids[slot] = id;
+  cur.prog[slot] = 0;
+  cur.rerolls += 1;
+  return { id, rerolls: cur.rerolls };
+}
+
 // ------------------------------------------------------- 购买/领奖操作 ----
 //
 // 客户端把操作批量发到 /profile/actions，形如：
@@ -276,8 +429,8 @@ function applyActions(p, actions) {
         break;
       }
       case 'task': {
-        const t = p[a.period];
-        if (t && Number.isInteger(a.slot) && a.slot >= 0 && a.slot < 4) t.claimed[a.slot] = 1;
+        // 客户端批量提交的领奖动作 → 这里必须真的发奖（见 claimTaskReward，奖励已在里面加过）
+        claimTaskReward(p, a.period, a.slot);
         break;
       }
       default:
@@ -334,13 +487,19 @@ route('POST', '/tasks/claim', async (req, res) => {
   const acc = requireAccount(req, res);
   if (!acc) return;
   const b = (await body(req)) || {};
-  applyActions(acc.profile, [{ k: 'task', period: b.period, slot: b.slot }]);
+  const got = claimTaskReward(acc.profile, b.period, b.slot);
   persist();
-  json(res, 200, { profile: p });
+  if (got) console.log(`[委托] ${acc.name} 领取 ${b.period}#${b.slot}：+${got.dust} 星尘${got.items.length ? ' + ' + got.items.join(',') : ''}`);
+  json(res, 200, { profile: acc.profile, reward: got });
 });
-route('POST', '/tasks/reroll', (req, res) => {
+route('POST', '/tasks/reroll', async (req, res) => {
   const acc = requireAccount(req, res);
   if (!acc) return;
+  const b = (await body(req)) || {};
+  const out = rerollTask(acc.profile, b.period, b.slot);
+  persist();
+  if (!out) return json(res, 400, { error: '本周期不能重随了。' });
+  console.log(`[委托] ${acc.name} 重随 ${b.period}#${b.slot} → ${out.id}`);
   json(res, 200, { profile: acc.profile });
 });
 route('GET', '/records', (req, res) => {
@@ -545,6 +704,18 @@ route('POST', '/runs/:id/finish', async (req, res, url, params) => {
   p.counters ||= {};
   p.counters.runs = (p.counters.runs || 0) + 1;
   p.counters.kills = (p.counters.kills || 0) + (result.kills || 0);
+  // 客户端在结算里上报本局各类计数器增量（progress.counters），合并进 counters，
+  // 委托/成就的进度都靠它。
+  const deltas = result.progress?.counters;
+  if (deltas && typeof deltas === 'object') {
+    for (const [key, value] of Object.entries(deltas)) {
+      const v = Number(value) || 0;
+      if (v) p.counters[key] = (p.counters[key] || 0) + v;
+    }
+  }
+  // 委托进度：本局增量累加到当前三个任务上（单局最好成绩型指标取 max）
+  const taskTouched = addTaskProgress(p, result);
+  if (taskTouched.length) console.log(`[委托] ${acc.name} 进度：${taskTouched.join('；')}`);
   // 通关解锁：官方后端在胜利后把 profile.biomes[地区] 提升一档
   //   -1 未解锁 / 0 普通 / 1 困难 / 2 噩梦；客户端的 UI 就是按 biomeTier() 判断锁不锁
   // （客户端自己只会把连通的地区初始化成 0，升档必须由后端做）

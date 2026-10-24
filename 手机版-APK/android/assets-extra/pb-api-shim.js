@@ -57,6 +57,255 @@ const ITEM_PRICES = {
 };
 /* PB_PRICES:END */
 
+  /* PB_TASKS:BEGIN (自动生成，勿手改) */
+  const TASK_TABLE = {
+    "daily": [
+      [
+        {
+          "id": "d-kills",
+          "metric": "kills",
+          "goal": 500
+        },
+        {
+          "id": "d-runs",
+          "metric": "runs",
+          "goal": 2
+        },
+        {
+          "id": "d-chests",
+          "metric": "chests",
+          "goal": 6
+        },
+        {
+          "id": "d-rocks",
+          "metric": "rocks",
+          "goal": 8
+        },
+        {
+          "id": "d-time",
+          "metric": "time",
+          "goal": 480
+        },
+        {
+          "id": "d-gold",
+          "metric": "gold",
+          "goal": 1200
+        }
+      ],
+      [
+        {
+          "id": "d-alphas",
+          "metric": "alphas",
+          "goal": 2
+        },
+        {
+          "id": "d-react",
+          "metric": "reactions",
+          "goal": 60
+        },
+        {
+          "id": "d-burn",
+          "metric": "burned",
+          "goal": 150
+        },
+        {
+          "id": "d-para",
+          "metric": "paralyzed",
+          "goal": 120
+        },
+        {
+          "id": "d-soak",
+          "metric": "soaked",
+          "goal": 200
+        },
+        {
+          "id": "d-crits",
+          "metric": "crits",
+          "goal": 400
+        },
+        {
+          "id": "d-boss",
+          "metric": "bosses",
+          "goal": 1
+        },
+        {
+          "id": "d-zone2",
+          "metric": "stage",
+          "goal": 2
+        }
+      ],
+      [
+        {
+          "id": "d-runkills",
+          "metric": "runKills",
+          "goal": 1500
+        },
+        {
+          "id": "d-ally",
+          "metric": "alphaCaught",
+          "goal": 1
+        },
+        {
+          "id": "d-zone3",
+          "metric": "stage",
+          "goal": 3
+        },
+        {
+          "id": "d-bosses",
+          "metric": "bosses",
+          "goal": 2
+        },
+        {
+          "id": "d-level",
+          "metric": "level",
+          "goal": 22
+        },
+        {
+          "id": "d-evo",
+          "metric": "evolutions",
+          "goal": 2
+        }
+      ]
+    ],
+    "weekly": [
+      [
+        {
+          "id": "w-kills",
+          "metric": "kills",
+          "goal": 8000
+        },
+        {
+          "id": "w-runs",
+          "metric": "runs",
+          "goal": 12
+        },
+        {
+          "id": "w-play",
+          "metric": "playtime",
+          "goal": 5400
+        },
+        {
+          "id": "w-chests",
+          "metric": "chests",
+          "goal": 50
+        }
+      ],
+      [
+        {
+          "id": "w-alphas",
+          "metric": "alphas",
+          "goal": 12
+        },
+        {
+          "id": "w-allies",
+          "metric": "alphaCaught",
+          "goal": 5
+        },
+        {
+          "id": "w-react",
+          "metric": "reactions",
+          "goal": 600
+        },
+        {
+          "id": "w-bosses",
+          "metric": "bosses",
+          "goal": 8
+        }
+      ],
+      [
+        {
+          "id": "w-win",
+          "metric": "wins",
+          "goal": 1
+        },
+        {
+          "id": "w-legend",
+          "metric": "legendaries",
+          "goal": 1
+        },
+        {
+          "id": "w-shiny",
+          "metric": "shinies",
+          "goal": 1
+        },
+        {
+          "id": "w-level",
+          "metric": "level",
+          "goal": 30
+        },
+        {
+          "id": "w-runkills",
+          "metric": "runKills",
+          "goal": 3000
+        }
+      ]
+    ]
+  };
+  
+  const TASK_DUST = {"daily":[60,100,160],"weekly":[300,450,700]};
+  
+  const TASK_EPOCH = 1791763200000;          // Date.UTC(2026,9,12)
+  const DAY = 86400000;
+  
+  // 单局最好成绩型指标（用 max 累加），其余用求和
+  const MAX_METRICS = new Set(['stage', 'level', 'runKills', 'time']);
+  
+  // 游戏内的确定性哈希（murmur3 finalizer）
+  const y = (e) => {
+    let t = (e ^ 2654435769) >>> 0;
+    t = Math.imul(t ^ (t >>> 16), 2246822507) >>> 0;
+    t = Math.imul(t ^ (t >>> 13), 3266489909) >>> 0;
+    return (t ^ (t >>> 16)) >>> 0;
+  };
+  
+  // 当前周期序号（= 客户端 En）
+  const periodIndex = (period, t = Date.now()) =>
+    period === 'daily'
+      ? Math.floor((t - TASK_EPOCH) / DAY) + 1
+      : Math.floor((t - TASK_EPOCH) / (7 * DAY)) + 1;
+  
+  // 抽签（= 客户端 He）：period, idx, slot(0-2), reroll 次数
+  function drawTask(period, idx, slot, reroll = 0) {
+    const list = TASK_TABLE[period][slot];
+    const a = y(idx * 977 + slot * 131 + (period === 'weekly' ? 50000 : 0)) % list.length;
+    if (!reroll) return list[a];
+    return list[(a + 1 + y(idx * 31 + slot * 7 + reroll * 1009) % (list.length - 1)) % list.length];
+  }
+  
+  // 任务查表（= 客户端 Ue）
+  const ALL_TASKS = [...TASK_TABLE.daily.flat(), ...TASK_TABLE.weekly.flat()];
+  const taskById = (id) => ALL_TASKS.find((t) => t.id === id) || null;
+  
+  // 奖励道具（= 客户端 Ke / qe）
+  const BAG_POOL = ["rare-candy","lucky-egg","amulet-coin","honey","shiny-stone"];
+  const dailyPrizeItem = (idx) => BAG_POOL[y(idx * 61 + 7) % BAG_POOL.length];
+  const weeklyPrizeItems = (idx) => [
+    'master-ball',
+    BAG_POOL[y(idx * 17 + 3) % BAG_POOL.length],
+    BAG_POOL[y(idx * 23 + 5) % BAG_POOL.length],
+  ];
+  
+  // 某个任务在本次结算里的增量
+  function metricDelta(metric, result = {}, counters = {}) {
+    if (metric === 'runs') return 1;
+    if (metric === 'runKills') return Number(result.kills) || 0;
+    if (metric === 'playtime') return Number(result.time) || 0;
+    if (metric === 'time') return Number(result.time) || 0;
+    if (metric in counters) return Number(counters[metric]) || 0;
+    if (metric in result) return Number(result[metric]) || 0;
+    return 0;
+  }
+  
+  // 三档全领后的大奖
+  function prizeReward(period, periodState, streak) {
+    if (period === 'weekly') {
+      return { dust: 500, items: weeklyPrizeItems(periodState.idx), streak: null };
+    }
+    const s = streak?.last === periodState.idx - 1 ? (streak.n || 0) + 1 : streak?.last === periodState.idx ? (streak.n || 1) : 1;
+    return { dust: 50 * Math.min(5, s), items: [dailyPrizeItem(periodState.idx)], streak: { last: periodState.idx, n: s } };
+  }
+  /* PB_TASKS:END */
+
   const API_PREFIX = '/api';
   const STORE_KEY = 'pb.local.store.v1';
   const SESSION_KEY = 'pb.local.session.v1';
@@ -425,6 +674,7 @@ const ITEM_PRICES = {
 
   route('GET', '/profile', (ctx) => {
     if (!ctx.account) return [401, { error: 'Invalid session.' }];
+    syncTasks(ctx.account.profile);   // 委托抽签与当前周期对齐
     return [200, { profile: ctx.account.profile, now: now() }];
   });
   route('PUT', '/profile/prefs', (ctx) => {
@@ -491,8 +741,8 @@ const ITEM_PRICES = {
           break;
         }
         case 'task': {
-          const t = p[a.period];
-          if (t && Number.isInteger(a.slot) && a.slot >= 0 && a.slot < 4) t.claimed[a.slot] = 1;
+          // 客户端批量提交的领奖动作 → 必须真的发奖
+          claimTaskReward(p, a.period, a.slot);
           break;
         }
         default:
@@ -509,6 +759,104 @@ const ITEM_PRICES = {
     persist();
     return [200, { profile: ctx.account.profile }];
   });
+
+  // ------------------------------------------------------------ 委托系统 ----
+  // 客户端只负责显示 prog，累加必须由后端做；抽签算法已在 PB_TASKS 数据块里复刻。
+  const TASK_PERIODS = ['daily', 'weekly'];
+
+  function newPeriodState(period, idx) {
+    return {
+      idx,
+      ids: [0, 1, 2].map((slot) => drawTask(period, idx, slot).id),
+      prog: [0, 0, 0],
+      claimed: [0, 0, 0, 0],
+      rerolls: 0,
+    };
+  }
+
+  function syncTasks(p) {
+    const stamp = now();
+    for (const period of TASK_PERIODS) {
+      const idx = periodIndex(period, stamp);
+      const cur = p[period];
+      if (!cur || typeof cur !== 'object' || cur.idx !== idx || !Array.isArray(cur.ids) || cur.ids.length !== 3) {
+        p[period] = newPeriodState(period, idx);
+        continue;
+      }
+      if (!Array.isArray(cur.prog)) cur.prog = [0, 0, 0];
+      if (!Array.isArray(cur.claimed) || cur.claimed.length !== 4) cur.claimed = [0, 0, 0, 0];
+      if (typeof cur.rerolls !== 'number') cur.rerolls = 0;
+    }
+    p.dailyStreak ||= { last: 0, n: 0 };
+    p.bag ||= {};
+  }
+
+  function addTaskProgress(p, result) {
+    syncTasks(p);
+    const counters = result?.progress?.counters || {};
+    const touched = [];
+    for (const period of TASK_PERIODS) {
+      const cur = p[period];
+      for (let slot = 0; slot < 3; slot++) {
+        const def = taskById(cur.ids[slot]);
+        if (!def) continue;
+        const delta = metricDelta(def.metric, result, counters);
+        if (!delta) continue;
+        const before = cur.prog[slot] || 0;
+        const next = MAX_METRICS.has(def.metric) ? Math.max(before, delta) : before + delta;
+        cur.prog[slot] = Math.min(def.goal, next);
+        if (cur.prog[slot] !== before) touched.push(`${period}#${slot} ${def.id}`);
+      }
+    }
+    return touched;
+  }
+
+  function taskClaimable(p, period, slot) {
+    const cur = p[period];
+    if (!cur || !Number.isInteger(slot) || slot < 0 || slot > 3 || cur.claimed[slot]) return false;
+    if (slot === 3) return cur.claimed[0] === 1 && cur.claimed[1] === 1 && cur.claimed[2] === 1;
+    const def = taskById(cur.ids[slot]);
+    return !!def && (cur.prog[slot] || 0) >= def.goal;
+  }
+
+  function claimTaskReward(p, period, slot) {
+    syncTasks(p);
+    if (!taskClaimable(p, period, slot)) return null;
+    const cur = p[period];
+    let dust = 0;
+    let items = [];
+    if (slot < 3) {
+      dust = TASK_DUST[period][slot] || 0;
+    } else {
+      const prize = prizeReward(period, cur, p.dailyStreak);
+      dust = prize.dust;
+      items = prize.items || [];
+      if (prize.streak) p.dailyStreak = prize.streak;
+    }
+    cur.claimed[slot] = 1;
+    for (const item of items) p.bag[item] = Math.min(9, (p.bag[item] || 0) + 1);
+    p.stardust = (Number(p.stardust) || 0) + dust;
+    p.totalStardust = (Number(p.totalStardust) || 0) + dust;
+    return { dust, items };
+  }
+
+  function rerollTask(p, period, slot) {
+    syncTasks(p);
+    const cur = p[period];
+    if (!cur || !Number.isInteger(slot) || slot < 0 || slot > 2) return null;
+    const def = taskById(cur.ids[slot]);
+    if (cur.rerolls >= 1 || cur.claimed[slot]) return null;
+    if (def && (cur.prog[slot] || 0) >= def.goal) return null;
+    let id = cur.ids[slot];
+    for (let r = cur.rerolls + 1; r < cur.rerolls + 8 && cur.ids.includes(id); r++) {
+      id = drawTask(period, cur.idx, slot, r).id;
+    }
+    if (cur.ids.includes(id)) return null;
+    cur.ids[slot] = id;
+    cur.prog[slot] = 0;
+    cur.rerolls += 1;
+    return { id };
+  }
 
   const profileMutation = (fn) => (ctx) => {
     if (!ctx.account) return [401, { error: 'Invalid session.' }];
@@ -551,6 +899,9 @@ const ITEM_PRICES = {
   });
   route('POST', '/tasks/reroll', (ctx) => {
     if (!ctx.account) return [401, { error: 'Invalid session.' }];
+    const b = ctx.body || {};
+    if (!rerollTask(ctx.account.profile, b.period, b.slot)) return [400, { error: '本周期不能重随了。' }];
+    persist();
     return [200, { profile: ctx.account.profile }];
   });
 
@@ -668,6 +1019,15 @@ const ITEM_PRICES = {
     p.counters ||= {};
     p.counters.runs = (p.counters.runs || 0) + 1;
     p.counters.kills = (p.counters.kills || 0) + (result.kills || 0);
+    // 合并客户端上报的计数器增量（委托/成就进度靠它），再累加委托进度
+    const deltas = result.progress?.counters;
+    if (deltas && typeof deltas === 'object') {
+      for (const [key, value] of Object.entries(deltas)) {
+        const v = Number(value) || 0;
+        if (v) p.counters[key] = (p.counters[key] || 0) + v;
+      }
+    }
+    addTaskProgress(p, result);
     // 通关解锁：官方后端在胜利后把 profile.biomes[地区] 提升一档
     //   -1 未解锁 / 0 普通 / 1 困难 / 2 噩梦（客户端只初始化 0，升档必须后端做）
     if (result.victory) {

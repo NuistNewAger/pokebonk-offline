@@ -32,6 +32,9 @@ dist/
 打包发布.ps1
 发布说明.md
 发布模板/
+部署到游玩版.ps1
+重启游玩版.ps1
+维护说明.md
 
 # 根目录 android\ 是开发用的临时脚本目录（extract-prices / smoke / test-* 等），
 # 不属于发布结构。真正的安卓工程在 手机版-APK/android/。
@@ -66,3 +69,6 @@ Pokebonk-Offline-*.apk
 *.log
 Thumbs.db
 desktop.ini
+电脑单机版-Windows/data/
+电脑单机版-Windows/browser/
+data/
