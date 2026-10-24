@@ -74,6 +74,14 @@ const mimeFor = (file) => MIME[path.extname(file).toLowerCase()] || 'application
 // ---------------------------------------------------------------- 存档 ----
 
 const STORE_FILE = path.join(DATA, 'store.json');
+// 修改器的本地设置（不放存档里，改存档不会丢）
+const TRAINER_FILE = path.join(DATA, 'trainer.json');
+const trainerSettings = { archiveCap: 0 };   // 0 = 官方原值（档案库容量 = 5 × 等级）
+try {
+  Object.assign(trainerSettings, JSON.parse(await readFile(TRAINER_FILE, 'utf8')));
+} catch {
+  /* 没设置过就用默认 */
+}
 let store = { accounts: {}, runs: {}, nextRun: 1, friends: {}, pres: {}, rooms: {}, invites: {} };
 try {
   store = JSON.parse(await readFile(STORE_FILE, 'utf8'));
@@ -96,6 +104,18 @@ function persist() {
       .then(() => writeFile(STORE_FILE, JSON.stringify(store)))
       .catch((e) => console.error('存档写入失败', e));
   }, 120);
+}
+
+// 修改器动存档前先留一份备份（每次启动服务器只备份一次，避免覆盖掉更早的好档）
+let storeBackedUp = false;
+async function backupStore() {
+  if (storeBackedUp) return;
+  storeBackedUp = true;
+  try {
+    const raw = await readFile(STORE_FILE);
+    await writeFile(`${STORE_FILE}.bak`, raw);
+    console.log('[修改器] 已备份存档 -> data/store.json.bak');
+  } catch { /* 还没有存档文件就不用备份 */ }
 }
 
 const accountByToken = (req) => {
@@ -387,6 +407,40 @@ function mergePokemon(body, accounts, season, mode) {
 }
 
 // 排行榜：官网全服榜 + 本地账号，合并后在本机重新排序。
+// ---- 合作模式：本地不提供联机房间，但能力检测与合作榜走官网真数据 ----
+// 主菜单的“合作模式”入口由 /coop/access 的 {show, play} 决定；合作排行榜也有真队伍。
+route('GET', '/coop/access', async (req, res) => {
+  const remote = await official.board('/coop/access?p=2').catch(() => null);
+  if (remote?.body) return json(res, 200, remote.body);
+  // 离线时仍然显示入口（只是不能开局），避免主菜单少一块
+  return json(res, 200, { mode: 'offline', show: true, play: false, me: null });
+});
+route('GET', '/coop/board', async (req, res, url) => {
+  const q = new URLSearchParams({
+    size: url.searchParams.get('size') || '2',
+    biome: url.searchParams.get('biome') || 'forest',
+    tier: url.searchParams.get('tier') || '0',
+  });
+  const season = url.searchParams.get('season');
+  if (season) q.set('season', season);
+  const remote = await official.board('/coop/board?' + q.toString()).catch(() => null);
+  if (remote?.body) {
+    res.setHeader('x-pb-board-source', remote.source);
+    return json(res, 200, remote.body);
+  }
+  // 离线兜底：结构必须完整，否则界面会显示“第 undefined 赛季 · NaN 支队伍”
+  return json(res, 200, {
+    entries: [], me: null, teams: 0, season: SEASON.n, ends: SEASON.end,
+    size: Number(q.get('size')), biome: q.get('biome'), tier: Number(q.get('tier')),
+  });
+});
+// 房间/邀请：本地单机版没有联机，给一句明确的话，别让界面卡在加载中
+route('GET', '/coop/invites', (req, res) => json(res, 200, []));
+route('GET', '/coop/ice', (req, res) => json(res, 200, { servers: [] }));
+route('POST', '/coop/rooms', (req, res) => json(res, 400, { error: '本地单机版不支持与其他玩家联机，无法创建房间。' }));
+route('POST', '/coop/rooms/:code/:action', (req, res) => json(res, 400, { error: '本地单机版不支持联机房间。' }));
+route('GET', '/coop/rooms/:code', (req, res) => json(res, 404, { error: '本地单机版不支持联机房间。' }));
+
 route('GET', '/leaderboard', async (req, res, url) => {
   const mode = url.searchParams.get('mode') || 'kills';
   const season = url.searchParams.get('season') || 'week';
@@ -491,6 +545,21 @@ route('POST', '/runs/:id/finish', async (req, res, url, params) => {
   p.counters ||= {};
   p.counters.runs = (p.counters.runs || 0) + 1;
   p.counters.kills = (p.counters.kills || 0) + (result.kills || 0);
+  // 通关解锁：官方后端在胜利后把 profile.biomes[地区] 提升一档
+  //   -1 未解锁 / 0 普通 / 1 困难 / 2 噩梦；客户端的 UI 就是按 biomeTier() 判断锁不锁
+  // （客户端自己只会把连通的地区初始化成 0，升档必须由后端做）
+  if (result.victory) {
+    const biome = result.biome || p.lastBiome;
+    const tier = Number(result.tier) || 0;
+    p.biomes ||= {};
+    const cur = Number(p.biomes[biome] ?? -1);
+    const next = Math.min(2, tier + 1);
+    if (biome && cur < next) {
+      p.biomes[biome] = next;
+      p.counters.wins = (p.counters.wins || 0) + 1;
+      console.log(`[解锁] ${acc.name} ${biome} 通关（难度 ${tier}）→ 解锁到档位 ${next}`);
+    }
+  }
   for (const sp of result.progress?.seen || []) if (!p.seen.includes(sp)) p.seen.push(sp);
   for (const sp of result.progress?.league || []) if (!p.league.includes(sp)) p.league.push(sp);
   for (const sp of result.progress?.shinies || []) if (!p.shinies.includes(sp)) p.shinies.push(sp);
@@ -629,24 +698,93 @@ function applyViewportPatch(src) {
   );
 }
 
+// 把对局对象暴露到 window.__pbRun，供修改器读写（宝可币/重随/跳过/放逐…）。
+// 锚点是每帧调用的 update() 里的 this.realTime += dt，变量名用正则匹配，换版本也能用。
+const RUN_HOOK_RE = /(update\(\w+\)\{)(let \w+=this\.input;this\.realTime\+=)/;
+function applyRunHook(src) {
+  if (!src.includes('this.realTime+=')) return src;
+  if (src.includes('window.__pbRun=this')) return src;
+  let out = src;
+  if (RUN_HOOK_RE.test(out)) {
+    out = out.replace(RUN_HOOK_RE, '$1window.__pbRun=this;$2');
+  } else {
+    out = out.replace(/(\w+\{)(?=this\.realTime\+=)/, '$1window.__pbRun=this;');
+  }
+  // 兜底：捡到钱的时候也会走 addGold，即使上面没命中，这里也能把对象暴露出来
+  if (!out.includes('window.__pbRun=this') || !/addGold/.test(out)) return out;
+  return out.replace(/(addGold\(\w+\)\{)(?!window\.__pbRun)/, '$1window.__pbRun=this;');
+}
+
+// 档案库容量补丁：游戏里是 Ae = e => 5 * (e.archive ?? 0)（5 × 档案库等级，4 级 = 20）。
+// 设定值 > 0 时把它改成固定容量，等级显示保持原样。换版本若公式变了，这里会匹配不上，
+// 届时容量回到官方值（不影响其它功能），可在启动日志里看到警告。
+const ARCHIVE_RE = /([\w$]+)\s*=\s*([\w$]+)\s*=>\s*5\s*\*\s*\(\s*[\w$]+\.archive\s*\?\?\s*0\s*\)/;
+function applyArchiveCap(src) {
+  const cap = Number(trainerSettings.archiveCap) || 0;
+  if (cap <= 0) return src;
+  if (!ARCHIVE_RE.test(src)) return src;
+  return src.replace(ARCHIVE_RE, `$1=$2=>${cap}`);
+}
+
+// 补丁指纹：补丁逻辑或设置改了它就变，用来给 HTML 里的脚本引用做缓存戳
+let PATCH_TAG = '';
+function computePatchTag() {
+  PATCH_TAG = crypto.createHash('sha1')
+    .update([
+      applyViewportPatch, applyRunHook, applyArchiveCap,
+      VIEWPORT_RE.source, RUN_HOOK_RE.source, ARCHIVE_RE.source,
+      String(trainerSettings.archiveCap || 0),
+    ].map(String).join('|'))
+    .digest('hex').slice(0, 8);
+  return PATCH_TAG;
+}
+computePatchTag();
+
 async function patchedBuffer(file, st) {
   const key = file;
   const hit = JS_CACHE.get(key);
-  if (hit && hit.mtime === st.mtimeMs) return hit.buf;
-  let buf = null;
+  if (hit && hit.mtime === st.mtimeMs) return hit;
+  let buf = null;          // 非 null 表示内容被我们改过
+  let body = null;         // 实际要发出去的内容（改过就用改过的，否则是原文件）
   if (st.size < 8 * 1024 * 1024) {
     const src = await readFile(file, 'utf8');
     let out = src;
     if (out.includes(API_FROM)) out = out.split(API_FROM).join('/api');
     if (out.includes(TURNSTILE_FROM)) out = out.split(TURNSTILE_FROM).join('/turnstile-stub.js');
     out = applyViewportPatch(out);
+    out = applyRunHook(out);
+    out = applyArchiveCap(out);
+    // 模块内部的相对引用也带上缓存戳：主包是被入口 JS 动态 import 的，
+    // URL 上加不了戳，老玩家缓存里那份（immutable）会一直命中旧内容。
+    out = out.replace(
+      /(\bfrom\s*|\bimport\s*\(\s*)(["'])(\.{1,2}\/[^"']+?\.js)\2/g,
+      (_m, kw, q, spec) => `${kw}${q}${spec}?pb=${PATCH_TAG}${q}`,
+    );
+    // Vite 的预加载依赖数组（m.f=["./main-xxx.js", …]）才是真正发起加载的地方，
+    // 里面是不带查询串的原始路径，必须一起加戳，否则老缓存会绕过上面的改写。
+    out = out.replace(
+      /(["'`])\.\/([\w.-]+-[A-Za-z0-9_-]{8}\.(?:js|css))\1/g,
+      (_m, q, name) => `${q}./${name}?pb=${PATCH_TAG}${q}`,
+    );
+    // 打个标记，让修改器能区分「脚本是旧的没补丁」和「还没进对局」
+    if (out.includes('window.__pbRun=this') && !out.startsWith('window.__pbHookLoaded')) {
+      out = `window.__pbHookLoaded=1;${out}`;
+    }
+    body = Buffer.from(out);
     if (out !== src) {
-      buf = Buffer.from(out);
-      console.log(`[patch] ${path.relative(ROOT, file)} -> 本地 API / 视口修正`);
+      buf = body;
+      console.log(`[patch] ${path.relative(ROOT, file)} -> 本地 API / 视口修正 / 修改器钩子`);
     }
   }
-  JS_CACHE.set(key, { mtime: st.mtimeMs, buf });
-  return buf;
+  // JS/CSS 一律带 ETag 走重新校验：脚本文件名里的哈希只对官网原始内容有效，
+  // 我们是运行时改写的，而且主包还是被入口 JS 动态 import 的（URL 上加不了缓存戳），
+  // 所以只有“每次都回来核对”才能保证玩家拿到打过补丁的版本。命中就是 304，几乎没有开销。
+  const etag = body
+    ? `"pb-${crypto.createHash('sha1').update(body).digest('hex').slice(0, 16)}"`
+    : `"raw-${st.size}-${Math.round(st.mtimeMs)}-${PATCH_TAG}"`;
+  const entry = { mtime: st.mtimeMs, buf, body, etag };
+  JS_CACHE.set(key, entry);
+  return entry;
 }
 
 async function htmlBuffer(file, st) {
@@ -662,18 +800,47 @@ async function htmlBuffer(file, st) {
       src = src.replace(/<head([^>]*)>/i, `<head$1>\n    <style id="pb-compat">${css}</style>`);
     }
   }
+  // 首次运行默认中文：游戏内置默认语言是西班牙语（作者母语），
+  // 没存过选择时它按 navigator.languages 自动判断，中文机器上也可能判成别的语言。
+  // 这里只在「本浏览器没存过选择」时写一次，玩家自己选过语言就完全不动它。
+  if (!src.includes('pb-lang-default')) {
+    const lang = '<script id="pb-lang-default">try{if(!localStorage.getItem("pokebonk.lang"))localStorage.setItem("pokebonk.lang","zh")}catch(e){}</script>';
+    src = src.replace(/<head([^>]*)>/i, `<head$1>\n    ${lang}`);
+  }
+  // 注入修改器（游戏里按 F8 打开）。把 lib/pb-trainer.js 删掉即可关掉这个功能。
+  if (!src.includes('pb-trainer.js') && existsSync(path.join(LIB, 'pb-trainer.js'))) {
+    const tag = '    <script src="/__pb/trainer.js"></script>\n';
+    src = /<\/body>/i.test(src) ? src.replace(/<\/body>/i, `${tag}</body>`) : src + tag;
+  }
+  // 给 HTML 里引用的 JS 加缓存戳：补丁逻辑一变，戳就变，浏览器自然会重新取
+  // （脚本文件名带哈希、原先又是 immutable 缓存，不加戳的话老玩家会一直用打补丁前的旧文件）
+  if (!src.includes('?pb=')) {
+    src = src.replace(
+      /(src|href)="((?:\.?\/)?assets\/[^"?]+\.js)"/g,
+      (_m, attr, url) => `${attr}="${url}?pb=${PATCH_TAG}"`,
+    );
+  }
   const buf = src === before ? null : Buffer.from(src);
   HTML_CACHE.set(file, { mtime: st.mtimeMs, buf });
   return buf;
 }
 
-function sendBuffer(req, res, buf, file, { immutable = false } = {}) {
+function sendBuffer(req, res, buf, file, { immutable = false, etag = null } = {}) {
   const total = buf.length;
   const headers = {
     'content-type': mimeFor(file),
     'cache-control': immutable ? 'public, max-age=31536000, immutable' : 'no-cache',
     'access-control-allow-origin': '*',
   };
+  // 打过补丁的 JS 不能用 immutable：内容是我们运行时改的，
+  // 必须让浏览器每次回来核对（命中就 304，开销很小）。
+  if (etag) {
+    headers.etag = etag;
+    if (req.headers['if-none-match'] === etag) {
+      res.writeHead(304, headers);
+      return res.end();
+    }
+  }
   const range = req.headers.range;
   if (range) {
     const m = /^bytes=(\d*)-(\d*)$/.exec(range.trim());
@@ -756,10 +923,10 @@ async function serveStatic(req, res, pathname) {
       if (existsSync(index)) return serveStatic(req, res, pathname.replace(/\/?$/, '/'));
     }
     const ext = path.extname(file).toLowerCase();
-    if (ext === '.js') {
-      const patched = await patchedBuffer(file, st);
-      if (patched) return sendBuffer(req, res, patched, file, { immutable: true });
-      return streamFile(req, res, file, st, true);
+    if (ext === '.js' || ext === '.css') {
+      const asset = await patchedBuffer(file, st);
+      if (asset.body) return sendBuffer(req, res, asset.body, file, { immutable: false, etag: asset.etag });
+      return sendBuffer(req, res, await readFile(file), file, { immutable: false, etag: asset.etag });
     }
     if (ext === '.html') {
       const patched = await htmlBuffer(file, st);
@@ -816,6 +983,137 @@ const server = http.createServer(async (req, res) => {
   if (url.pathname === '/__pb/refresh-boards') {
     const n = await official.warm().catch(() => 0);
     return json(res, 200, { refreshed: n, ...official.stats() });
+  }
+
+  // ------------------------------------------------------------ 修改器 ----
+  if (url.pathname === '/__pb/trainer.js') {
+    const buf = await readFile(path.join(LIB, 'pb-trainer.js'));
+    res.writeHead(200, { 'content-type': 'text/javascript; charset=utf-8', 'cache-control': 'no-store', 'content-length': buf.length });
+    return res.end(buf);
+  }
+  if (url.pathname === '/__pb/trainer' || url.pathname === '/__pb/trainer/') {
+    const buf = await readFile(path.join(LIB, 'pb-trainer.html'));
+    res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store', 'content-length': buf.length });
+    return res.end(buf);
+  }
+  if (url.pathname === '/__pb/trainer/accounts') {
+    return json(res, 200, {
+      settings: trainerSettings,
+      archiveCapPatched: Number(trainerSettings.archiveCap) > 0,
+      accounts: Object.values(store.accounts).map((a) => ({
+        id: a.id,
+        name: a.name,
+        guest: !!a.guest,
+        stardust: a.profile?.stardust ?? 0,
+        labCount: Object.keys(a.profile?.lab || {}).length,
+        itemCount: (a.profile?.itemsOwned || []).length,
+        seenCount: (a.profile?.seen || []).length,
+      })),
+    });
+  }
+  if (url.pathname === '/__pb/trainer/apply' && req.method === 'POST') {
+    const b = (await body(req)) || {};
+    const acc = store.accounts[b.id] || Object.values(store.accounts)[0];
+    if (!acc) return json(res, 404, { error: '本机还没有任何账号，先在游戏里创建或游客进入一次' });
+    const p = acc.profile;
+    await backupStore();
+    let message = '';
+    let warning = '';
+    switch (b.action) {
+      case 'stardust': {
+        const v = Math.max(0, Math.round(Number(b.value) || 0));
+        if (b.mode === 'add') p.stardust = (Number(p.stardust) || 0) + v;
+        else p.stardust = v;
+        p.totalStardust = Math.max(Number(p.totalStardust) || 0, p.stardust);
+        message = `星尘已设为 ${p.stardust.toLocaleString('zh-CN')}`;
+        break;
+      }
+      case 'lab-all': {
+        const all = b.level === 'max';
+        p.lab = {};
+        if (all) for (const [id, def] of Object.entries(LAB_ITEMS)) p.lab[id] = def.max;
+        message = all ? `研究所全部升满（${Object.keys(LAB_ITEMS).length} 项）` : '研究所等级已清零';
+        break;
+      }
+      case 'items-all': {
+        const keys = new Set(Object.keys(ITEM_PRICES));
+        try {
+          const raw = JSON.parse(await readFile(path.join(ROOT, 'data', 'items.json'), 'utf8'));
+          for (const k of Object.keys(raw)) keys.add(k);
+        } catch { /* 数据文件读不到就只用商店清单 */ }
+        p.itemsOwned = [...keys];
+        message = `道具全解锁（${keys.size} 件）`;
+        break;
+      }
+      case 'banished-clear':
+        p.banished = [];
+        message = '放逐名单已清空';
+        break;
+      case 'archive-cap': {
+        const cap = Math.max(0, Math.min(999, Math.round(Number(b.value) || 0)));
+        trainerSettings.archiveCap = cap;
+        await mkdir(DATA, { recursive: true });
+        await writeFile(TRAINER_FILE, JSON.stringify(trainerSettings, null, 2));
+        computePatchTag();     // 指纹变了 → 浏览器会重新取打过补丁的脚本
+        JS_CACHE.clear();      // 让补丁按新设置重新生成
+        HTML_CACHE.clear();
+        message = cap > 0 ? `档案库容量已固定为 ${cap}（回游戏按 F5 生效）` : '档案库容量已恢复官方算法（5 × 等级）';
+        break;
+      }
+      case 'restore-backup': {
+        // 只把选中账号的档案退回备份状态，其它账号不受影响
+        let old = null;
+        try { old = JSON.parse(await readFile(`${STORE_FILE}.bak`, 'utf8')); } catch { /* 没有备份 */ }
+        const oldAcc = old?.accounts?.[acc.id];
+        if (!oldAcc) return json(res, 404, { error: '备份里没有这个账号（备份在服务器启动后第一次修改时生成）' });
+        acc.profile = oldAcc.profile;
+        message = '已还原到上次修改前的状态';
+        warning = '只回退档案数值，对局记录与账号本身不受影响';
+        break;
+      }
+      case 'unlock-tier': {
+        // 按历史通关记录补解锁（老存档在这个功能实现前赢过，靠这个补回来）
+        p.biomes ||= {};
+        const won = new Set((p.runs || []).filter((r) => r.victory).map((r) => `${r.biome}:${Number(r.tier) || 0}`));
+        let n = 0;
+        for (const key of won) {
+          const [biome, tier] = key.split(':');
+          const next = Math.min(2, Number(tier) + 1);
+          if ((p.biomes[biome] ?? -1) < next) { p.biomes[biome] = next; n++; }
+        }
+        message = n ? `已按通关记录补上 ${n} 个解锁` : '没找到通关记录，先去赢一局普通难度';
+        warning = '回游戏按 F5 生效';
+        break;
+      }
+      case 'unlock-biomes': {
+        const ids = ['forest', 'desert', 'coast', 'ice', 'graveyard', 'volcano', 'tower'];
+        p.biomes ||= {};
+        for (const id of ids) p.biomes[id] = 2;
+        message = `已解锁全部 ${ids.length} 个地区（普通/困难/噩梦）`;
+        warning = '回游戏按 F5 生效';
+        break;
+      }
+      case 'dex-all': {
+        let ids = [];
+        try {
+          const raw = JSON.parse(await readFile(path.join(ROOT, 'data', 'pokemon.json'), 'utf8'));
+          ids = raw.map((x) => x.id).filter(Boolean);
+        } catch {
+          ids = Array.from({ length: 1025 }, (_, i) => i + 1);
+        }
+        p.league = [...ids];
+        p.unlocked = [...ids];
+        p.seen = [...ids];
+        warning = '会写入联盟/已见名单，成就与统计会随之变化';
+        message = `已解锁 ${ids.length} 种宝可梦`;
+        break;
+      }
+      default:
+        return json(res, 400, { error: `未知操作 ${b.action}` });
+    }
+    persist();
+    console.log(`[修改器] ${acc.name}: ${message}`);
+    return json(res, 200, { ok: true, message, warning, stardust: p.stardust });
   }
 
   if (url.pathname.startsWith('/api/')) {

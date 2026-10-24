@@ -557,6 +557,34 @@ const ITEM_PRICES = {
   route('GET', '/records', (ctx) => (ctx.account ? [200, []] : [401, { error: 'Invalid session.' }]));
   route('GET', '/records/endless', (ctx) => (ctx.account ? [200, []] : [401, { error: 'Invalid session.' }]));
 
+  // 合作模式：本地不提供联机房间，但能力检测与合作榜走官网真数据
+  // （主菜单的“合作模式”入口由 /coop/access 的 {show, play} 决定）
+  route('GET', '/coop/access', async () => {
+    const remote = await officialGet('/coop/access?p=2');
+    if (remote) return [200, remote];
+    return [200, { mode: 'offline', show: true, play: false, me: null }];
+  });
+  route('GET', '/coop/board', async (ctx) => {
+    const q = new URLSearchParams({
+      size: ctx.params.get('size') || '2',
+      biome: ctx.params.get('biome') || 'forest',
+      tier: ctx.params.get('tier') || '0',
+    });
+    const seasonParam = ctx.params.get('season');
+    if (seasonParam) q.set('season', seasonParam);
+    const remote = await officialGet('/coop/board?' + q.toString());
+    if (remote) return [200, remote];
+    return [200, {
+      entries: [], me: null, teams: 0, season: season.n, ends: season.end,
+      size: Number(q.get('size')), biome: q.get('biome'), tier: Number(q.get('tier')),
+    }];
+  });
+  route('GET', '/coop/invites', () => [200, []]);
+  route('GET', '/coop/ice', () => [200, { servers: [] }]);
+  route('POST', '/coop/rooms', () => [400, { error: '本地单机版不支持与其他玩家联机，无法创建房间。' }]);
+  route('POST', '/coop/rooms/:code/:action', () => [400, { error: '本地单机版不支持联机房间。' }]);
+  route('GET', '/coop/rooms/:code', () => [404, { error: '本地单机版不支持联机房间。' }]);
+
   route('GET', '/leaderboard', async (ctx) => {
     const mode = ctx.params.get('mode') || 'kills';
     const seasonKey = ctx.params.get('season') || 'week';
@@ -640,6 +668,19 @@ const ITEM_PRICES = {
     p.counters ||= {};
     p.counters.runs = (p.counters.runs || 0) + 1;
     p.counters.kills = (p.counters.kills || 0) + (result.kills || 0);
+    // 通关解锁：官方后端在胜利后把 profile.biomes[地区] 提升一档
+    //   -1 未解锁 / 0 普通 / 1 困难 / 2 噩梦（客户端只初始化 0，升档必须后端做）
+    if (result.victory) {
+      const biome = result.biome || p.lastBiome;
+      const tier = Number(result.tier) || 0;
+      p.biomes ||= {};
+      const cur = Number(p.biomes[biome] ?? -1);
+      const next = Math.min(2, tier + 1);
+      if (biome && cur < next) {
+        p.biomes[biome] = next;
+        p.counters.wins = (p.counters.wins || 0) + 1;
+      }
+    }
     for (const sp of result.progress?.seen || []) if (!p.seen.includes(sp)) p.seen.push(sp);
     for (const sp of result.progress?.league || []) if (!p.league.includes(sp)) p.league.push(sp);
     for (const sp of result.progress?.shinies || []) if (!p.shinies.includes(sp)) p.shinies.push(sp);
