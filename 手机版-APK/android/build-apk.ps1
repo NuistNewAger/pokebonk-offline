@@ -8,24 +8,56 @@
 #   * aapt2 / zipalign / apksigner 是原生程序，处理不了中文路径，
 #     所以所有原生工具的输入输出都放在纯 ASCII 的临时目录里完成，最后把 APK 拷回来。
 param(
-  # 默认值改为从环境变量读取，避免把本机用户名/路径写死进公开仓库。
-  # 需要时用 -Sdk / -Jdk 显式传参即可。
-  [string]$Sdk = $(if ($env:ANDROID_SDK_ROOT) { $env:ANDROID_SDK_ROOT } else { Join-Path $env:LOCALAPPDATA 'Android\Sdk' }),
-  [string]$Jdk = $(if ($env:JAVA_HOME) { $env:JAVA_HOME } else { Join-Path ${env:ProgramFiles} 'Java\jdk' }),
+  # 留空则自动探测：环境变量 → 常见安装位置 → 从 PATH 上的 adb/javac 反推。
+  # 想显式指定就用 -Sdk / -Jdk。仓库里不写死任何本机路径。
+  [string]$Sdk = '',
+  [string]$Jdk = '',
+  [string]$VersionName = '',
   [switch]$SkipInstall
 )
 
 $ErrorActionPreference = 'Stop'
 $android = $PSScriptRoot
 $appRoot = Split-Path -Parent $android
+
+function Resolve-Tool([string[]]$candidates, [string[]]$globs, [string]$probe) {
+  foreach ($c in $candidates) { if ($c -and (Test-Path $c)) { return (Resolve-Path $c).Path } }
+  foreach ($g in $globs) {
+    $hit = Get-ChildItem $g -Directory -ErrorAction SilentlyContinue | Select-Object -First 1
+    if ($hit) { return $hit.FullName }
+  }
+  if ($probe) {
+    $cmd = Get-Command $probe -ErrorAction SilentlyContinue
+    if ($cmd -and $cmd.Source) { return (Split-Path -Parent (Split-Path -Parent $cmd.Source)) }
+  }
+  return $null
+}
+
+if (-not $Sdk) {
+  $Sdk = Resolve-Tool @(
+    $env:ANDROID_SDK_ROOT, $env:ANDROID_HOME,
+    (Join-Path $env:LOCALAPPDATA 'Android\Sdk'),
+    (Join-Path $env:USERPROFILE 'android-sdk'),
+    'C:\Android\Sdk'
+  ) @() 'adb'
+}
+if (-not $Jdk) {
+  $Jdk = Resolve-Tool @($env:JAVA_HOME, 'C:\develop JAVA\jdk') @(
+    (Join-Path ${env:ProgramFiles} 'Java\jdk*'),
+    (Join-Path ${env:ProgramFiles} 'Eclipse Adoptium\jdk*'),
+    (Join-Path ${env:ProgramFiles} 'Microsoft\jdk*')
+  ) 'javac'
+}
+if (-not $Sdk) { throw '找不到 Android SDK：请设置 ANDROID_SDK_ROOT，或用 -Sdk 指定' }
+if (-not $Jdk) { throw '找不到 JDK：请设置 JAVA_HOME，或用 -Jdk 指定' }
+Write-Host "Android SDK: $Sdk"
+Write-Host "JDK        : $Jdk"
+
 # 自动选用已安装的最新 build-tools（34 里的 R8 处理不了新版 javac 生成的内部类）
 $bt = Get-ChildItem (Join-Path $Sdk 'build-tools') -Directory |
   Sort-Object { [version]$_.Name } -Descending | Select-Object -First 1 -ExpandProperty FullName
 $androidJar = Join-Path $Sdk 'platforms\android-34\android.jar'
 $adb = Join-Path $Sdk 'platform-tools\adb.exe'
-$versionName = '0.8.28'
-$apkName = "Pokebonk-Offline-$versionName.apk"
-$apkPath = Join-Path $appRoot $apkName
 $keystore = Join-Path $android 'pokebonk.keystore'
 
 foreach ($p in @($bt, $androidJar)) {
@@ -46,8 +78,20 @@ $web = Join-Path $pcRoot 'web'
 $compatCss = Join-Path $pcRoot 'lib\pb-compat.css'
 if (-not (Test-Path $compatCss)) { $compatCss = $null }
 
+# 版本号：优先 -VersionName，其次读游戏自带的 web\version.json（{build, version}）
+if (-not $VersionName) {
+  $vf = Join-Path $web 'version.json'
+  if (Test-Path $vf) {
+    try { $VersionName = (Get-Content $vf -Raw | ConvertFrom-Json).version } catch { }
+  }
+}
+if (-not $VersionName) { $VersionName = '0.0.0' }
+$apkName = "Pokebonk-Offline-$VersionName.apk"
+$apkPath = Join-Path $appRoot $apkName
+
 Write-Host "使用 build-tools: $(Split-Path -Leaf $bt)"
 Write-Host "游戏文件来源   : $pcRoot"
+Write-Host "游戏版本       : $VersionName"
 
 # 纯 ASCII 临时工作目录（关键：绕开原生工具的中文路径问题）
 $work = Join-Path $env:TEMP ('pb-apk-' + [guid]::NewGuid().ToString('N').Substring(0, 8))
@@ -70,7 +114,7 @@ try {
     --manifest "$work\AndroidManifest.xml" `
     -R "$work\res.zip" --auto-add-overlay --java "$work\gen" `
     --min-sdk-version 24 --target-sdk-version 31 `
-    --version-code 1 --version-name $versionName --no-version-vectors
+    --version-code 1 --version-name $VersionName --no-version-vectors
   if ($LASTEXITCODE -ne 0) { throw 'aapt2 link 失败' }
 
   Write-Host '== 4/7 编译 Java ==' -ForegroundColor Cyan

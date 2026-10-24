@@ -11,6 +11,52 @@
 (function () {
   'use strict';
 
+  /* PB_PRICES:BEGIN (自动生成，勿手改) */
+// 由 android/dev/extract-prices.mjs 从游戏包自动生成，请勿手改。
+// 来源: main-CPuTGAQ--mvlr7rzv.js + news-CbTCXK8Y-mvlr7rzv.js
+// 价格规则: we(x) = round(x * 0.85 / 5) * 5（游戏内 85 折 + 取整到 5）
+const we = (x) => Math.round((x * 0.85) / 5) * 5;
+const TABLE = { get: (a, i) => a[Math.min(i, a.length - 1)] };
+const LAB_ITEMS = {
+  'slot-move': { max: 1, cost: () => we(1500) },
+  'slot-vit': { max: 2, cost: (lv) => we(TABLE.get([1200,3000], lv)) },
+  'reroll': { max: 6, cost: (lv) => we(120 * 1.4 ** lv) },
+  'skip': { max: 6, cost: (lv) => we(80 * 1.4 ** lv) },
+  'banish': { max: 6, cost: (lv) => we(150 * 1.4 ** lv) },
+  'choice4': { max: 1, cost: () => we(3000) },
+  'dmg': { max: 8, cost: (lv) => we(100 * 1.4 ** lv) },
+  'hp': { max: 8, cost: (lv) => we(100 * 1.4 ** lv) },
+  'spd': { max: 6, cost: (lv) => we(120 * 1.45 ** lv) },
+  'xp': { max: 6, cost: (lv) => we(120 * 1.45 ** lv) },
+  'gold': { max: 6, cost: (lv) => we(100 * 1.45 ** lv) },
+  'luck': { max: 6, cost: (lv) => we(140 * 1.45 ** lv) },
+  'magnet': { max: 5, cost: (lv) => we(80 * 1.45 ** lv) },
+  'regen': { max: 5, cost: (lv) => we(120 * 1.45 ** lv) },
+  'armor': { max: 6, cost: (lv) => we(120 * 1.45 ** lv) },
+  'revive': { max: 1, cost: () => we(5000) },
+  'research': { max: 4, cost: (lv) => we(250 * 1.6 ** lv) },
+  'party': { max: 1, cost: () => we(3500) },
+  'archive': { max: 4, cost: (lv) => we(TABLE.get([600,1200,2000,3000], lv)) },
+  'crit': { max: 5, cost: (lv) => we(200 * 1.5 ** lv) },
+  'atkspd': { max: 5, cost: (lv) => we(220 * 1.5 ** lv) },
+  'area': { max: 5, cost: (lv) => we(200 * 1.5 ** lv) },
+  'ult': { max: 5, cost: (lv) => we(250 * 1.5 ** lv) },
+  'bag': { max: 1, cost: () => we(4000) },
+};
+const ITEM_PRICES = {
+  'soda-pop': 150, 'repel': 150, 'white-flute': 150, 'binding-band': 200, 'metronome': 200, 'smooth-rock': 250,
+  'adrenaline-orb': 250, 'awakening': 250, 'old-rod': 300, 'burn-heal': 300, 'ice-heal': 300, 'metal-powder': 300,
+  'lemonade': 250, 'secret-key': 300, 'gold-teeth': 300, 'macho-brace': 350, 'focus-band': 350, 'kings-rock': 400,
+  'eviolite': 400, 'black-sludge': 400, 'lum-berry': 450, 'stick': 500, 'shed-shell': 500, 'razor-fang': 550,
+  'cell-battery': 600, 'bicycle': 500, 'iron-ball': 500, 'fresh-water': 550, 'full-heal': 550, 'guard-spec': 600,
+  'coin-case': 600, 'poke-doll': 550, 'dowsing-machine': 600, 'focus-sash': 900, 'comet-shard': 900, 'fire-stone': 1000,
+  'thunder-stone': 1000, 'ice-stone': 1000, 'leaf-stone': 1000, 'protector': 1100, 'electirizer': 1100, 'revive': 1200,
+  'griseous-orb': 1200, 'reaper-cloth': 1400, 'thick-club': 1100, 'rage-candy-bar': 1100, 'silph-scope': 1200, 'ss-ticket': 1200,
+  'max-ether': 1200, 'moon-stone': 2200, 'silver-wing': 2500, 'sun-stone': 2500, 'adamant-orb': 2800, 'lustrous-orb': 2800,
+  'soul-dew': 3000, 'dawn-stone': 3200, 'rainbow-wing': 3500, 'poke-flute': 3000, 'tm-case': 3200,
+};
+/* PB_PRICES:END */
+
   const API_PREFIX = '/api';
   const STORE_KEY = 'pb.local.store.v1';
   const SESSION_KEY = 'pb.local.session.v1';
@@ -405,8 +451,62 @@
     persist();
     return [200, { profile: p }];
   });
+  // 客户端把买升级/买道具等操作批量发到这里；它自己已经先扣钱升级了，
+  // 服务端必须做同样的事并把结果返回，否则界面会被 adopt() 回滚。
+  // 价格表（LAB_ITEMS / ITEM_PRICES）由 android/dev/extract-prices.mjs 自动生成。
+  function applyActions(p, actions) {
+    let spent = 0;
+    for (const a of Array.isArray(actions) ? actions : []) {
+      if (!a || typeof a !== 'object') continue;
+      switch (a.k) {
+        case 'lab': {
+          const def = LAB_ITEMS[a.id];
+          const cur = Number(p.lab?.[a.id]) || 0;
+          const want = Math.max(cur, Number(a.lv) || cur + 1);
+          const next = Math.min(want, def ? def.max : want);
+          if (def) for (let l = cur; l < next; l++) spent += def.cost(l);
+          p.lab ||= {};
+          p.lab[a.id] = next;
+          break;
+        }
+        case 'item': {
+          p.itemsOwned ||= [];
+          if (a.key && !p.itemsOwned.includes(a.key)) {
+            if (ITEM_PRICES[a.key] !== undefined) spent += ITEM_PRICES[a.key];
+            p.itemsOwned.push(a.key);
+          }
+          break;
+        }
+        case 'archive': {
+          p.itemsOff ||= [];
+          if (a.key) {
+            p.itemsOff = a.off
+              ? [...new Set([...p.itemsOff, a.key])]
+              : p.itemsOff.filter((k) => k !== a.key);
+          }
+          break;
+        }
+        case 'quest': {
+          if (a.id) { p.quests ||= {}; p.quests[a.id] = 1; }
+          break;
+        }
+        case 'task': {
+          const t = p[a.period];
+          if (t && Number.isInteger(a.slot) && a.slot >= 0 && a.slot < 4) t.claimed[a.slot] = 1;
+          break;
+        }
+        default:
+          break;
+      }
+    }
+    if (spent > 0) p.stardust = Math.max(0, (Number(p.stardust) || 0) - spent);
+    return spent;
+  }
+
   route('POST', '/profile/actions', (ctx) => {
     if (!ctx.account) return [401, { error: 'Invalid session.' }];
+    applyActions(ctx.account.profile, (ctx.body || {}).actions);
+    persist();
     return [200, { profile: ctx.account.profile }];
   });
 
@@ -417,19 +517,38 @@
     persist();
     return [200, { profile: p }];
   };
-  route('POST', '/lab/buy', profileMutation((p, b) => { p.lab[b.id] = (p.lab[b.id] ?? 0) + 1; }));
-  route('POST', '/items/buy', profileMutation((p, b) => {
-    if (b.key && !p.itemsOwned.includes(b.key)) p.itemsOwned.push(b.key);
-  }));
-  route('POST', '/items/archive', profileMutation((p, b) => {
-    if (!b.key) return;
-    p.itemsOff = b.off ? [...new Set([...p.itemsOff, b.key])] : p.itemsOff.filter((k) => k !== b.key);
-  }));
-  route('POST', '/quests/claim', profileMutation((p, b) => { if (b.id) p.quests[b.id] = 1; }));
-  route('POST', '/tasks/claim', profileMutation((p, b) => {
-    const t = p[b.period];
-    if (t && Number.isInteger(b.slot) && b.slot >= 0 && b.slot < 4) t.claimed[b.slot] = 1;
-  }));
+  route('POST', '/lab/buy', (ctx) => {
+    if (!ctx.account) return [401, { error: 'Invalid session.' }];
+    applyActions(ctx.account.profile, [{ k: 'lab', id: (ctx.body || {}).id }]);
+    persist();
+    return [200, { profile: ctx.account.profile }];
+  });
+  route('POST', '/items/buy', (ctx) => {
+    if (!ctx.account) return [401, { error: 'Invalid session.' }];
+    applyActions(ctx.account.profile, [{ k: 'item', key: (ctx.body || {}).key }]);
+    persist();
+    return [200, { profile: ctx.account.profile }];
+  });
+  route('POST', '/items/archive', (ctx) => {
+    if (!ctx.account) return [401, { error: 'Invalid session.' }];
+    const b = ctx.body || {};
+    applyActions(ctx.account.profile, [{ k: 'archive', key: b.key, off: b.off }]);
+    persist();
+    return [200, { profile: ctx.account.profile }];
+  });
+  route('POST', '/quests/claim', (ctx) => {
+    if (!ctx.account) return [401, { error: 'Invalid session.' }];
+    applyActions(ctx.account.profile, [{ k: 'quest', id: (ctx.body || {}).id }]);
+    persist();
+    return [200, { profile: ctx.account.profile }];
+  });
+  route('POST', '/tasks/claim', (ctx) => {
+    if (!ctx.account) return [401, { error: 'Invalid session.' }];
+    const b = ctx.body || {};
+    applyActions(ctx.account.profile, [{ k: 'task', period: b.period, slot: b.slot }]);
+    persist();
+    return [200, { profile: ctx.account.profile }];
+  });
   route('POST', '/tasks/reroll', (ctx) => {
     if (!ctx.account) return [401, { error: 'Invalid session.' }];
     return [200, { profile: ctx.account.profile }];

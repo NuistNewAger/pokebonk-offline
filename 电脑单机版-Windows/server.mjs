@@ -21,6 +21,7 @@ import {
 } from './lib/api-shared.mjs';
 import { socialRoutes, edgeKey } from './lib/api-social.mjs';
 import * as official from './lib/official.mjs';
+import { LAB_ITEMS, ITEM_PRICES } from './lib/prices.mjs';
 
 const PORT = Number(process.env.PORT || 8787);
 const UPSTREAM = 'https://pokebonk.com';
@@ -210,9 +211,70 @@ route('POST', '/profile/starter', async (req, res) => {
   persist();
   json(res, 200, { profile: p });
 });
-route('POST', '/profile/actions', (req, res) => {
+// ------------------------------------------------------- 购买/领奖操作 ----
+//
+// 客户端把操作批量发到 /profile/actions，形如：
+//   { actions: [ {k:'lab', id, lv}, {k:'item', key}, {k:'archive', key, off},
+//                {k:'quest', id}, {k:'task', period, slot} ] }
+// 其中 lab 的 lv 是客户端已经加过的目标等级（客户端自己先扣了钱、升了级），
+// 所以服务端必须做同样的事并把结果返回，否则 adopt() 会把界面回滚。
+// 价格表由 android/dev/extract-prices.mjs 从游戏包里自动生成。
+function applyActions(p, actions) {
+  let spent = 0;
+  for (const a of Array.isArray(actions) ? actions : []) {
+    if (!a || typeof a !== 'object') continue;
+    switch (a.k) {
+      case 'lab': {
+        const def = LAB_ITEMS[a.id];
+        const cur = Number(p.lab?.[a.id]) || 0;
+        const want = Math.max(cur, Number(a.lv) || cur + 1);
+        const next = Math.min(want, def ? def.max : want);
+        if (def) for (let l = cur; l < next; l++) spent += def.cost(l);
+        p.lab ||= {};
+        p.lab[a.id] = next;
+        break;
+      }
+      case 'item': {
+        p.itemsOwned ||= [];
+        if (a.key && !p.itemsOwned.includes(a.key)) {
+          if (ITEM_PRICES[a.key] !== undefined) spent += ITEM_PRICES[a.key];
+          p.itemsOwned.push(a.key);
+        }
+        break;
+      }
+      case 'archive': {
+        p.itemsOff ||= [];
+        if (a.key) {
+          p.itemsOff = a.off
+            ? [...new Set([...p.itemsOff, a.key])]
+            : p.itemsOff.filter((k) => k !== a.key);
+        }
+        break;
+      }
+      case 'quest': {
+        if (a.id) { p.quests ||= {}; p.quests[a.id] = 1; }
+        break;
+      }
+      case 'task': {
+        const t = p[a.period];
+        if (t && Number.isInteger(a.slot) && a.slot >= 0 && a.slot < 4) t.claimed[a.slot] = 1;
+        break;
+      }
+      default:
+        break;
+    }
+  }
+  if (spent > 0) p.stardust = Math.max(0, (Number(p.stardust) || 0) - spent);
+  return spent;
+}
+
+route('POST', '/profile/actions', async (req, res) => {
   const acc = requireAccount(req, res);
   if (!acc) return;
+  const b = (await body(req)) || {};
+  const spent = applyActions(acc.profile, b.actions);
+  persist();
+  if (spent) console.log(`[操作] 应用 ${b.actions?.length || 0} 条，花费星尘 ${spent}`);
   json(res, 200, { profile: acc.profile });
 });
 
@@ -220,48 +282,39 @@ route('POST', '/lab/buy', async (req, res) => {
   const acc = requireAccount(req, res);
   if (!acc) return;
   const b = (await body(req)) || {};
-  const p = acc.profile;
-  const lv = p.lab?.[b.id] ?? 0;
-  p.lab[b.id] = lv + 1;
+  applyActions(acc.profile, [{ k: 'lab', id: b.id }]);
   persist();
-  json(res, 200, { profile: p });
+  json(res, 200, { profile: acc.profile });
 });
 route('POST', '/items/buy', async (req, res) => {
   const acc = requireAccount(req, res);
   if (!acc) return;
   const b = (await body(req)) || {};
-  const p = acc.profile;
-  if (b.key && !p.itemsOwned.includes(b.key)) p.itemsOwned.push(b.key);
+  applyActions(acc.profile, [{ k: 'item', key: b.key }]);
   persist();
-  json(res, 200, { profile: p });
+  json(res, 200, { profile: acc.profile });
 });
 route('POST', '/items/archive', async (req, res) => {
   const acc = requireAccount(req, res);
   if (!acc) return;
   const b = (await body(req)) || {};
-  const p = acc.profile;
-  if (b.key) {
-    p.itemsOff = b.off ? [...new Set([...p.itemsOff, b.key])] : p.itemsOff.filter((k) => k !== b.key);
-  }
+  applyActions(acc.profile, [{ k: 'archive', key: b.key, off: b.off }]);
   persist();
-  json(res, 200, { profile: p });
+  json(res, 200, { profile: acc.profile });
 });
 route('POST', '/quests/claim', async (req, res) => {
   const acc = requireAccount(req, res);
   if (!acc) return;
   const b = (await body(req)) || {};
-  const p = acc.profile;
-  if (b.id) p.quests[b.id] = 1;
+  applyActions(acc.profile, [{ k: 'quest', id: b.id }]);
   persist();
-  json(res, 200, { profile: p });
+  json(res, 200, { profile: acc.profile });
 });
 route('POST', '/tasks/claim', async (req, res) => {
   const acc = requireAccount(req, res);
   if (!acc) return;
   const b = (await body(req)) || {};
-  const p = acc.profile;
-  const t = p[b.period];
-  if (t && Number.isInteger(b.slot) && b.slot >= 0 && b.slot < 4) t.claimed[b.slot] = 1;
+  applyActions(acc.profile, [{ k: 'task', period: b.period, slot: b.slot }]);
   persist();
   json(res, 200, { profile: p });
 });

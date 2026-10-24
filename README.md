@@ -43,7 +43,7 @@
 
 **断网也能玩**；联网时还能自动从官网同步游戏更新、并把官网真实排行榜取回来。
 
-当前版本：**v0.8.28（构建 mvkwzlv4）**，游戏文件 6773 个 / 约 127 MB。
+当前版本：**v0.8.34（构建 mvlr7rzv）**，游戏文件 7532 个 / 约 144 MB。
 
 ---
 
@@ -52,7 +52,7 @@
 | | 💻 电脑单机版（Windows） | 📱 手机版（Android APK） |
 | --- | --- | --- |
 | 目录 | `电脑单机版-Windows\` | `手机版-APK\` |
-| 怎么用 | 双击 `启动游戏.vbs` | 安装 `Pokebonk-Offline-0.8.28.apk` |
+| 怎么用 | 双击 `启动游戏.vbs` | 安装 `Pokebonk-Offline-0.8.34.apk` |
 | 前置条件 | 需要装 [Node.js](https://nodejs.org)（LTS） | 什么都不用装，Android 7.0+ |
 | 独立性 | 依赖本机 Node 起一个本地服务器 | **完全独立**，装机即玩，不依赖电脑 |
 | 游戏更新 | 每 6 小时自动同步官网（可关） | 重新打包 APK 安装即可 |
@@ -76,7 +76,7 @@
 ### 📱 手机版
 
 1. 进 `手机版-APK\`；
-2. 把 `Pokebonk-Offline-0.8.28.apk` 传到手机/平板；
+2. 把 `Pokebonk-Offline-0.8.34.apk` 传到手机/平板；
 3. 点开安装（提示"未知来源应用"时允许即可，没有上架应用商店，是自签名包）；
 4. 桌面点 **PokéBonk 离线版** 图标，横屏全屏开始玩。
 
@@ -85,7 +85,7 @@
 ## 目录结构
 
 ```
-Pokebonk-Offline-0.8.28/
+Pokebonk-Offline-0.8.34/
 ├─ README.md                  ← 你正在看的这份总体说明
 ├─ LICENSE                    ← 自写代码可自由使用；游戏素材不授权、禁止商用、仅个人游玩
 ├─ NOTICE.md                  ← 署名、素材权利人、同类项目致谢、下架承诺
@@ -97,12 +97,12 @@ Pokebonk-Offline-0.8.28/
 │   ├─ server.mjs            本地服务器 + 本地 API + 榜单合并
 │   ├─ sync.mjs              官网镜像增量同步
 │   ├─ lib/                  本地 API 实现（账号/档案/对局/赛季/活动/官网榜单）
-│   ├─ web/                  游戏本体（6773 个文件，约 127 MB）
+│   ├─ web/                  游戏本体（7532 个文件，约 144 MB）
 │   └─ state/asset-list.txt  资源清单（同步用）
 │
-└─ 手机版-APK/                ← 装 APK 即玩（APK 本体在 Releases 下载）
+└─ 手机版-APK/                ← 装 APK 即玩
     ├─ README.md              （手机版详细说明）
-    ├─ Pokebonk-Offline-0.8.28.apk      安装包（约 106.7 MB，自签名）
+    ├─ Pokebonk-Offline-0.8.34.apk      安装包（约 120.4 MB，自签名）
     └─ android/                         完整源码与构建脚本（无需 Gradle）
         ├─ java/ res/ AndroidManifest.xml
         ├─ assets-extra/pb-api-shim.js  手机端本地 API 层
